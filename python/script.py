@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 import mplfinance as mpf
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
+from newsfetcher import CryptoNewsFetcher
 import json
 import logging
 import sys
@@ -19,6 +20,9 @@ class CryptoAnalyzer:
         self.symbols = os.getenv("SYMBOLS", "BTCUSDT").split(",")
         self.interval = os.getenv("INTERVAL", "1h")
         self.days = int(os.getenv("DAYS", 14))
+
+         # Initialize CryptoNewsFetcher
+        self.news_fetcher = CryptoNewsFetcher()
 
         logging.info(f"SYMBOLS: {self.symbols}")
         logging.info(f"DAYS: {self.days}")
@@ -127,35 +131,7 @@ class CryptoAnalyzer:
             print(json.dumps({"symbol": symbol, "error": "No RSI data available"}))
 
         
-    def fetch_crypto_news(self, keyword, max_articles=5):
-        """Fetches top news articles about a specific cryptocurrency using NewsAPI."""
-        
-        url = "https://newsapi.org/v2/everything"
-        # Use UTC for consistency with NewsAPI
-        today = datetime.utcnow().strftime('%Y-%m-%d')
-        yesterday = (datetime.utcnow() - timedelta(days=1)).strftime('%Y-%m-%d')  # Include yesterday
 
-        params = {
-            "q": keyword,  # Search keyword
-            "language": "fr",  # French articles
-            "sortBy": "publishedAt",
-            "from": yesterday,  # Articles from yesterday onward
-            "apiKey": os.getenv("NEWSAPI_KEY"),
-            "pageSize": max_articles
-        }
-        try:
-            response = requests.get(url, params=params)
-            if response.status_code == 200:
-                articles = response.json().get("articles", [])
-                news = [{"title": article["title"], "url": article["url"]} for article in articles]
-                return news
-            else:
-                logging.error(f"NewsAPI Error for {keyword}: {response.status_code} - {response.text}")
-                return []
-        except Exception as e:
-            logging.error(f"Error fetching news for {keyword}: {e}")
-            return []
-        
     def load_symbol_keywords(self):
         """Load symbol keywords mapping from environment variables."""
         symbol_keywords = {}
@@ -167,8 +143,6 @@ class CryptoAnalyzer:
 
     def main(self):
         """Main method to process cryptocurrency data."""
-        
-        # Charger le mapping des symboles depuis .env
         symbol_keywords = self.load_symbol_keywords()
 
         end_date = datetime.now()
@@ -183,32 +157,27 @@ class CryptoAnalyzer:
                 data = self.calculate_rsi(data)
                 chart_file = self.generate_chart(data, symbol)
 
-                # Utiliser le mot-clé pertinent pour les actualités
-                news_keyword = symbol_keywords.get(symbol, symbol)  # Utilise le mapping ou le symbole par défaut
-                news = self.fetch_crypto_news(keyword=news_keyword)
+                news_keyword = symbol_keywords.get(symbol, symbol)
+                #news = self.news_fetcher.fetch_crypto_news(keyword=news_keyword, max_articles=2)
+                # tweets = self.news_fetcher.fetch_twitter_info(keyword=news_keyword, max_tweets=1)
 
                 if not data['RSI'].empty:
                     latest_rsi = data['RSI'].iloc[-1]
                     results.append({
                         "symbol": symbol,
                         "rsi": latest_rsi,
-                        "chart": chart_file,
-                        "news": news
+                        "chart": chart_file
+                        #"news": news
+                        # "tweets": tweets
                     })
                 else:
-                    results.append({
-                        "symbol": symbol,
-                        "error": "No RSI data available"
-                    })
+                    results.append({"symbol": symbol, "error": "No RSI data available"})
             except Exception as e:
                 logging.error(f"Error processing {symbol}: {e}", exc_info=True)
-                results.append({
-                    "symbol": symbol,
-                    "error": str(e)
-                })
+                results.append({"symbol": symbol, "error": str(e)})
 
-        # Only print JSON output to stdout
         print(json.dumps(results))
+
 
 
 
