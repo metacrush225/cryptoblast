@@ -16,6 +16,7 @@
     "express": "^4.21.2",
     "googleapis": "^135.0.0",
     "mongoose": "^8.3.1",
+    "routes": "^2.1.0",
     "sqlite3": "^5.1.7",
     "twitter-api-v2": "^1.18.2"
   }

@@ -1,8 +1,9 @@
 require('dotenv').config({ path: './.env' });
 const { exec } = require('child_process');
-const { Client, GatewayIntentBits } = require('discord.js');
-const { TwitterApi } = require('twitter-api-v2');
-const axios = require('axios');
+const { Client, GatewayIntentBits, REST, Routes } = require('discord.js');
+const AlertManager = require('./alertManager');
+
+const lastCryptoCommand = require('./lastCryptoCommand');
 
 // Constants
 const pythonScript = './python/script.py';
@@ -12,122 +13,83 @@ const discordClient = new Client({
     intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages],
 });
 
-// Utility functions
-const clearChannel = async (channel) => {
+let alertManager; // Declare alertManager globally
+
+
+const symbolToNameMap = {
+    XRPUSDT: "XRP",
+    BTCUSDT: "Bitcoin",
+    ETHUSDT: "Ethereum",
+    DOGEUSDT: "Dogecoin",
+    SHIBUSDT: "ShibaInu"
+    // Add more mappings as needed
+};
+
+
+
+const DISCORD_NEWS_CHANNEL_ID = process.env.DISCORD_NEWS_CHANNEL_ID;
+const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN;
+const DISCORD_CLIENT_ID = process.env.DISCORD_CLIENT_ID;
+const NEWS_API_KEY = process.env.NEWS_API_KEY;
+const TWITTER_BEARER_TOKEN = process.env.TWITTER_BEARER_TOKEN;
+
+
+console.log('AlertManager is initialized.');
+
+
+if (!DISCORD_BOT_TOKEN || !DISCORD_CLIENT_ID || !DISCORD_NEWS_CHANNEL_ID) {
+    console.error("Missing required environment variables. Check your .env file.");
+    process.exit(1);
+}
+
+
+const rest = new REST({ version: '10' }).setToken(DISCORD_BOT_TOKEN);
+
+
+
+const convertSymbolsToQuery = (symbols) => {
+    return symbols
+        .map(symbol => symbolToNameMap[symbol] || symbol) // Fallback to original if no mapping exists
+        .join(" OR ");
+};
+
+
+// Register slash commands
+const commands = [
+    {
+        name: lastCryptoCommand.name,
+        description: lastCryptoCommand.description,
+    },
+];
+
+// Register the command
+(async () => {
     try {
-        let fetched;
-        do {
-            fetched = await channel.messages.fetch({ limit: 100 });
-            if (fetched.size > 0) {
-                await channel.bulkDelete(fetched, true);
-                console.log(`Deleted ${fetched.size} messages in channel: ${channel.name}`);
-            }
-        } while (fetched.size > 0);
+        console.log('Started refreshing application (/) commands.');
+
+        await rest.put(Routes.applicationCommands(DISCORD_CLIENT_ID), {
+            body: commands,
+        });
+
+        console.log('Successfully reloaded application (/) commands.');
     } catch (error) {
-        console.error(`Error clearing messages in channel ${channel.name}:`, error);
+        console.error('Error registering commands:', error);
     }
-};
+})();
 
-const fetchNews = async (query, maxArticles = 5) => {
-    const apiKey = process.env.NEWS_API_KEY;
-    const url = "https://newsapi.org/v2/everything";
-    const today = new Date().toISOString().split('T')[0];
-    const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
 
-    try {
-        const response = await axios.get(url, {
-            params: {
-                q: query,
-                language: "fr",
-                sortBy: "publishedAt",
-                from: yesterday,
-                to: today,
-                apiKey,
-                pageSize: maxArticles,
-            },
-        });
 
-        if (response.status === 200) {
-            return response.data.articles.map(article => ({
-                title: article.title,
-                url: article.url,
-            }));
-        }
-        console.error(`NewsAPI error: ${response.status}`);
-        return [];
-    } catch (error) {
-        console.error('Error fetching news:', error);
-        return [];
+// Command handling
+discordClient.on('interactionCreate', async (interaction) => {
+    if (!interaction.isCommand()) return;
+
+    const { commandName } = interaction;
+
+    if (commandName === lastCryptoCommand.name) {
+        await lastCryptoCommand.execute(interaction, discordClient, DISCORD_NEWS_CHANNEL_ID);
     }
-};
+});
 
-const fetchTweets = async (query) => {
-    const client = new TwitterApi(process.env.TWITTER_BEARER_TOKEN);
-
-    try {
-        const response = await client.v2.search(query, {
-            "tweet.fields": "created_at",
-            max_results: 10,
-        });
-        return response.data || [];
-    } catch (error) {
-        console.error('Error fetching tweets:', error);
-        return [];
-    }
-};
-
-const formatMessage = (symbol, rsi, result) => {
-    let message = "";
-
-    if (rsi < 41) {
-        message = `${symbol} is oversold (RSI = ${rsi}). It might be a good time to buy.\n`;
-    } else if (rsi > 70) {
-        message = `${symbol} is overbought (RSI = ${rsi}). Consider securing profits.\n`;
-    } else {
-        return `${symbol} has a neutral RSI (${rsi}). No immediate action suggested.\n`;
-    }
-
-    if (result.news?.length) {
-        message += "\n**Latest News:**\n";
-        result.news.forEach((article, index) => {
-            message += `${index + 1}. [${article.title}](${article.url})\n`;
-        });
-    }
-
-    return message;
-};
-
-const sendSymbolAlert = async (channel, symbol, rsi, result) => {
-    const message = formatMessage(symbol, rsi, result);
-    await clearChannel(channel);
-    await channel.send({
-        content: message,
-        files: result.chart ? [result.chart] : [],
-    });
-};
-
-const sendSummaryAlert = async (generalChannel, symbolsBelow30, symbolsAbove70, allNews, tweets) => {
-    let summaryMessage = "**RSI Alert Summary**\n\n";
-    if (symbolsBelow30.length) summaryMessage += `**Oversold (RSI < 30):** ${symbolsBelow30.join(", ")}\n\n`;
-    if (symbolsAbove70.length) summaryMessage += `**Overbought (RSI > 70):** ${symbolsAbove70.join(", ")}\n\n`;
-
-    if (allNews.length) {
-        summaryMessage += "**Relevant News Articles:**\n";
-        allNews.forEach((article, index) => {
-            summaryMessage += `${index + 1}. [${article.title}](${article.url})\n`;
-        });
-    }
-
-    if (tweets.length) {
-        summaryMessage += "\n**Relevant Tweets:**\n";
-        tweets.forEach((tweet, index) => {
-            summaryMessage += `${index + 1}. ${tweet.text} (Posted: ${tweet.created_at})\n`;
-        });
-    }
-
-    await clearChannel(generalChannel);
-    await generalChannel.send({ content: summaryMessage });
-};
 
 // Main function to check RSI
 const checkRSI = () => {
@@ -144,46 +106,30 @@ const checkRSI = () => {
             const symbolsAbove70 = [];
 
             for (const result of results) {
-                const { symbol, rsi, chart, error: scriptError } = result;
+                const { symbol, rsi } = result;
 
-                if (scriptError) {
-                    console.error(`Error for ${symbol} in Python script: ${scriptError}`);
-                    continue;
-                }
-
-                console.log(`Symbol: ${symbol}, RSI: ${rsi}`);
-
-                if (rsi < 41) symbolsBelow30.push(symbol);
+                if (rsi < 30) symbolsBelow30.push(symbol);
                 if (rsi > 70) symbolsAbove70.push(symbol);
-
-                const channelId = process.env[`DISCORD_${symbol.toUpperCase()}_CHANNEL_ID`];
-                const channel = discordClient.channels.cache.get(channelId);
-
-                if (channel && (rsi < 41 || rsi > 70)) {
-                    await sendSymbolAlert(channel, symbol, rsi, result);
-                } else {
-                    console.warn(
-                        channel
-                            ? `RSI for ${symbol} is not in alert range.`
-                            : `Discord channel not found for ${symbol}.`
-                    );
-                }
             }
 
             const alertSymbols = [...symbolsBelow30, ...symbolsAbove70];
             if (alertSymbols.length > 0) {
-                const newsQuery = alertSymbols.join(" OR ");
-                const allNews = await fetchNews(newsQuery, 2);
-                const tweets = await fetchTweets(newsQuery);
+                const newsQuery = convertSymbolsToQuery(alertSymbols);
 
-                const generalChannelId = process.env.DISCORD_GENERAL_CHANNEL_ID;
-                const generalChannel = discordClient.channels.cache.get(generalChannelId);
+                // Send Alerts
+                await alertManager.sendApiNewsAlert(
+                    symbolsBelow30,
+                    symbolsAbove70,
+                    newsQuery,
+                    process.env.DISCORD_NEWS_CHANNEL_ID
+                );
 
-                if (generalChannel) {
-                    await sendSummaryAlert(generalChannel, symbolsBelow30, symbolsAbove70, allNews, tweets);
-                } else {
-                    console.error("General Discord channel not found.");
-                }
+                // await alertManager.sendTwitterAlert(
+                //     symbolsBelow30,
+                //     symbolsAbove70,
+                //     newsQuery,
+                //     process.env.DISCORD_TWITTER_CHANNEL_ID
+                // );
             }
         } catch (err) {
             console.error('Error parsing Python script output:', err);
@@ -191,13 +137,28 @@ const checkRSI = () => {
     });
 };
 
+
 // Schedule RSI checks
-setInterval(checkRSI, 20000);
+setInterval(checkRSI, 7200000);
+
 
 // Discord bot ready event
 discordClient.once('ready', () => {
     console.log(`Logged in as ${discordClient.user.tag}!`);
+
+    // Initialize AlertManager after client is ready
+    alertManager = new AlertManager(
+        discordClient,
+        NEWS_API_KEY,
+        TWITTER_BEARER_TOKEN
+    );
+    console.log('AlertManager is initialized.');
+
+    // Start RSI check
+    checkRSI();
+
 });
 
 // Start Discord bot
-discordClient.login(process.env.DISCORD_BOT_TOKEN);
+discordClient.login(DISCORD_BOT_TOKEN);
+
