@@ -106,22 +106,22 @@ const checkRSI = () => {
             const symbolsAbove70 = [];
 
             for (const result of results) {
-                const { symbol, rsi } = result;
+                const { symbol, rsi, chart } = result;
 
-                if (rsi < 30) symbolsBelow30.push(symbol);
-                if (rsi > 70) symbolsAbove70.push(symbol);
+                if (rsi < 30) symbolsBelow30.push({ symbol, chart });
+                if (rsi > 70) symbolsAbove70.push({ symbol, chart });
             }
 
             const alertSymbols = [...symbolsBelow30, ...symbolsAbove70];
             if (alertSymbols.length > 0) {
-                const newsQuery = convertSymbolsToQuery(alertSymbols);
+                const newsQuery = convertSymbolsToQuery(alertSymbols.map(({ symbol }) => symbol));
+
+                await alertManager.sendGraph(symbolsBelow30, symbolsAbove70);
 
                 // Send Alerts
                 await alertManager.sendApiNewsAlert(
-                    symbolsBelow30,
-                    symbolsAbove70,
                     newsQuery,
-                    process.env.DISCORD_NEWS_CHANNEL_ID
+                    DISCORD_NEWS_CHANNEL_ID
                 );
 
                 // await alertManager.sendTwitterAlert(
@@ -139,7 +139,7 @@ const checkRSI = () => {
 
 
 // Schedule RSI checks
-setInterval(checkRSI, 7200000);
+setInterval(checkRSI, 1800000);
 
 
 // Discord bot ready event
