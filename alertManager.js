@@ -4,120 +4,106 @@ class AlertManager {
     constructor(discordClient, newsApiKey, twitterBearerToken) {
         this.discordClient = discordClient;
         this.newsFetcher = new NewsFetcher(newsApiKey, twitterBearerToken);
+        this.channelCache = new Map(); // Cache for dynamically created channels
     }
-
-    async sendTwitterAlert(symbolsBelow30, symbolsAbove70, newsQuery, twitterChannelId) {
-        const tweets = await this.newsFetcher.fetchTweets(newsQuery, 2);
-        const twitterChannel = await this.getChannel(twitterChannelId);
-
-        if (twitterChannel) {
-            let summaryMessage = "**RSI Alert Summary**\n\n";
-            if (symbolsBelow30.length) summaryMessage += `**Oversold (RSI < 30):** ${symbolsBelow30.join(", ")}\n\n`;
-            if (symbolsAbove70.length) summaryMessage += `**Overbought (RSI > 70):** ${symbolsAbove70.join(", ")}\n\n`;
-
-            if (tweets.length) {
-                summaryMessage += "\n**Relevant Tweets:**\n";
-                tweets.forEach((tweet, index) => {
-                    summaryMessage += `${index + 1}. ${tweet.text} (Posted: ${tweet.created_at})\n`;
-                });
-            }
-
-            await twitterChannel.send({ content: summaryMessage });
-        } else {
-            console.error("Twitter channel not found.");
-        }
-    }
-
 
     async sendGraph(symbolsBelow30, symbolsAbove70) {
-        // Utility function to send a message with optional chart to a specific channel using its ID from .env
-        const sendToChannel = async (symbol, message, chart = null) => {
-            const envVariableName = `DISCORD_${symbol}_CHANNEL_ID`;
-            const channelId = process.env[envVariableName];
+
+        const channelName = `RSI`;
+        const channel = await this.getOrCreateChannel(channelName);
     
-            if (!channelId) {
-                console.warn(`Environment variable ${envVariableName} not found.`);
-                return;
-            }
+        if (!channel) {
+            console.error(`Failed to fetch or create the channel: ${channelName}`);
+            return;
+        }
     
-            const targetChannel = await this.getChannel(channelId);
-            if (targetChannel) {
-                console.info(`Sending message to channel with ID ${channelId} for symbol ${symbol}`);
+        console.info(`Sending RSI alerts to channel: ${channelName}`);
     
-                // If a chart is provided, send it as an attachment
-                if (chart) {
-                    await targetChannel.send({
-                        content: message,
-                        files: [chart] // Discord supports file attachments here
-                    });
-                } else {
-                    await targetChannel.send({ content: message });
-                }
-            } else {
-                console.warn(`Channel with ID ${channelId} not found.`);
-            }
-        };
-    
-        // Send individual messages to symbol-specific channels
+        // Loop through symbolsBelow30 and send embeds with charts
         for (const { symbol, chart } of symbolsBelow30) {
-            const message = `⚠️ **${symbol}** is oversold! (RSI < 30)`;
-            await sendToChannel(symbol, message, chart);
+            const embed = {
+                color: 0xff0000, // Red for oversold
+                title: `⚠️ Oversold Alert: ${symbol}`,
+                description: `The RSI for **${symbol}** is below 30, indicating an oversold condition.`,
+                image: {
+                    url: `attachment://${symbol}-chart.png`, // Reference the attached chart
+                },
+                timestamp: new Date(),
+                footer: { text: 'RSI Alert System' },
+            };
+    
+            // Send the embed with the chart as an attachment
+            await channel.send({
+                embeds: [embed],
+                files: [{ attachment: chart, name: `${symbol}-chart.png` }], // Attach the chart file
+            });
         }
     
+        // Loop through symbolsAbove70 and send embeds with charts
         for (const { symbol, chart } of symbolsAbove70) {
-            const message = `⚠️ **${symbol}** is overbought! (RSI > 70)`;
-            await sendToChannel(symbol, message, chart);
+            const embed = {
+                color: 0x00ff00, // Green for overbought
+                title: `⚠️ Overbought Alert: ${symbol}`,
+                description: `The RSI for **${symbol}** is above 70, indicating an overbought condition.`,
+                image: {
+                    url: `attachment://${symbol}-chart.png`, // Reference the attached chart
+                },
+                timestamp: new Date(),
+                footer: { text: 'RSI Alert System' },
+            };
+    
+            // Send the embed with the chart as an attachment
+            await channel.send({
+                embeds: [embed],
+                files: [{ attachment: chart, name: `${symbol}-chart.png` }], // Attach the chart file
+            });
         }
     }
+    //`⚠️ **${symbol}** is overbought! (RSI > 70)`;
+
+    async getOrCreateChannel(channelName) {
+        console.info("getOrCreateChannel reached");
     
-    
-
-
-
-    async sendApiNewsAlert(newsQuery, newsChannelId) {
-        const allNews = await this.newsFetcher.fetchNews(newsQuery, 2);
-        const newsChannel = await this.getChannel(newsChannelId);
-
-        if (newsChannel) {
-            console.info(`Sending to channel ${newsChannelId}`);
-            console.info(`newsQuery = ${newsQuery}`);
-
-            let summaryMessage = "**RSI Alert Summary**\n\n";
-
-            if (allNews.length) {
-                summaryMessage += "**Relevant News Articles:**\n";
-                allNews.forEach((article, index) => {
-                    summaryMessage += `${index + 1}. [${article.title}](${article.url})\n`;
-                });
-            }
-
-            await newsChannel.send({ content: summaryMessage });
-        } else {
-            console.error("News channel not found.");
+        if (this.channelCache.has(channelName)) {
+            console.warn(`channelCache already has : ${channelName}`);
+            return this.channelCache.get(channelName);
         }
-    }
-
-
-    // Utility to get channel by name
-    async getChannelByName(channelName) {
-        const channels = await this.client.channels.fetch();
-        const targetChannel = channels.find(channel => channel.name === channelName);
-        return targetChannel;
-    }
-
-    // Fetch or get Discord channel
-    async getChannel(channelId) {
+    
         try {
-            return this.discordClient.channels.cache.get(channelId) ||
-                    await this.discordClient.channels.fetch(channelId);
+            const guild = this.discordClient.guilds.cache.first(); // Assuming the bot is in one guild
+            if (!guild) {
+                console.error('Bot is not in any guilds.');
+                return null;
+            }
+    
+            // Check if the channel already exists
+            let channel = guild.channels.cache.find(
+                ch => ch.name === channelName && ch.type === 'GUILD_TEXT'
+            );
+    
+            if (!channel) {
+                console.info(`Creating new channel: ${channelName}`);
+                channel = await guild.channels.create({
+                    name: channelName, // Explicitly set the name
+                    type: 0, // Use `0` for a text channel in older Discord.js or `GUILD_TEXT` in newer versions
+                    reason: 'RSI alerts',
+                });
+            } else {
+                console.info(`Channel already exists: ${channelName}`);
+            }
+    
+            this.channelCache.set(channelName, channel); // Cache the found or created channel
+            return channel;
         } catch (error) {
-            console.error(`Error fetching channel with ID ${channelId}:`, error);
+            console.error(`Error creating or fetching channel ${channelName}:`, error);
             return null;
         }
     }
+    
+    
+    
 
-
-    // Utility functions
+    // Utility function for clearing messages (unchanged from original)
     async clearChannel(channel) {
         try {
             let fetched;
@@ -132,7 +118,6 @@ class AlertManager {
             console.error(`Error clearing messages in channel ${channel.name}:`, error);
         }
     }
-
 }
 
 module.exports = AlertManager;

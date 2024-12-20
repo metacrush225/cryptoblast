@@ -108,9 +108,12 @@ const checkRSI = () => {
             for (const result of results) {
                 const { symbol, rsi, chart } = result;
 
-                if (rsi < 30) symbolsBelow30.push({ symbol, chart });
+                if (rsi < 60) symbolsBelow30.push({ symbol, chart });
                 if (rsi > 70) symbolsAbove70.push({ symbol, chart });
             }
+
+            console.log(`symbolBelow30.length = ${symbolsBelow30.length}`);
+            console.log(`symbolAbove70.length = ${symbolsAbove70.length}`);
 
             const alertSymbols = [...symbolsBelow30, ...symbolsAbove70];
             if (alertSymbols.length > 0) {
@@ -119,10 +122,10 @@ const checkRSI = () => {
                 await alertManager.sendGraph(symbolsBelow30, symbolsAbove70);
 
                 // Send Alerts
-                await alertManager.sendApiNewsAlert(
-                    newsQuery,
-                    DISCORD_NEWS_CHANNEL_ID
-                );
+                // await alertManager.sendApiNewsAlert(
+                //     newsQuery,
+                //     DISCORD_NEWS_CHANNEL_ID
+                // );
 
                 // await alertManager.sendTwitterAlert(
                 //     symbolsBelow30,
