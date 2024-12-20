@@ -108,7 +108,7 @@ const checkRSI = () => {
             for (const result of results) {
                 const { symbol, rsi, chart } = result;
 
-                if (rsi < 60) symbolsBelow30.push({ symbol, chart });
+                if (rsi < 30) symbolsBelow30.push({ symbol, chart });
                 if (rsi > 70) symbolsAbove70.push({ symbol, chart });
             }
 
